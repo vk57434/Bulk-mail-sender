@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Outlet, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import useAuth from './hooks/useAuth'
 import { ThemeProvider } from './context/ThemeContext'
@@ -18,6 +18,7 @@ import CampaignsPage from './pages/CampaignsPage'
 import CampaignDetailPage from './pages/CampaignDetailPage'
 import CampaignFormPage from './pages/CampaignFormPage'
 import RecipientsPage from './pages/RecipientsPage'
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage'
 import './App.css'
 
 function ProtectedRoute() {
@@ -29,13 +30,19 @@ function ProtectedRoute() {
 function LoginRoute() {
   const { isAuthenticated, loading } = useAuth()
   if (loading) return <Loading label="Restoring your session..." />
-  return isAuthenticated ? <Navigate to="/dashboard" replace /> : <LoginPage />
+  return isAuthenticated ? <Navigate to="/dashboard" replace /> : (
+    <div className="public-login-shell">
+      <LoginPage />
+      <Link className="login-privacy-link" to="/privacy-policy">Privacy Policy</Link>
+    </div>
+  )
 }
 
 function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginRoute />} />
+      <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<ErrorBoundary><Layout /></ErrorBoundary>}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
