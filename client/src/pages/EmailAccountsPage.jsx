@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Mail, Plus, X } from 'lucide-react'
-import { accounts, accountConfig, addAccount, gmailConnect, removeAccount, setDefaultAccount, testAccount } from '../services/mailflow.service'
+import { Check, Mail, Plus, RefreshCw, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { accounts, accountConfig, addAccount, gmailConnect, removeAccount, resendEmailAccountOtp, setDefaultAccount, testAccount, verifyEmailAccount } from '../services/mailflow.service'
 import Loading from '../components/Loading'
 import EmptyState from '../components/EmptyState'
 import useToast from '../hooks/useToast'
@@ -28,6 +28,21 @@ export default function EmailAccountsPage() {
   const [busy, setBusy] = useState(false)
   const [gmailBusy, setGmailBusy] = useState(false)
   const [formMessage, setFormMessage] = useState('')
+  const [verificationAccountId, setVerificationAccountId] = useState('')
+  const [otp, setOtp] = useState('')
+  const [otpError, setOtpError] = useState('')
+  const [otpBusy, setOtpBusy] = useState(false)
+  const [otpResending, setOtpResending] = useState(false)
+  const [countdownNow, setCountdownNow] = useState(Date.now())
+  const verificationAccount = list.find((account) => account.id === verificationAccountId)
+
+  const closeModal = useCallback(() => {
+    if (busy) return
+    setModalOpen(false)
+    setProvider('')
+    setForm(initialForm)
+    setFormMessage('')
+  }, [busy])
 
   const startGmailConnect = useCallback(async () => {
     if (gmailBusy) return
@@ -45,12 +60,12 @@ export default function EmailAccountsPage() {
       notify(err?.message || 'Unable to start Gmail connection. Please try again.', 'error')
       setGmailBusy(false)
     }
-  }, [gmailBusy, gmailConfigured, notify])
+  }, [gmailBusy, gmailConfigured, notify, closeModal])
 
   const clearQuery = useCallback(() => {
     const next = new URLSearchParams(location.search)
     let changed = false
-    ;['connected', 'error', 'message'].forEach((k) => {
+    ;['connected', 'error', 'message', 'verify', 'accountId'].forEach((k) => {
       if (next.has(k)) {
         next.delete(k)
         changed = true
@@ -65,7 +80,14 @@ export default function EmailAccountsPage() {
     const connected = query.get('connected')
     const qError = query.get('error')
     const qMessage = query.get('message')
-    if (connected === 'gmail') {
+    const verify = query.get('verify')
+    const accountId = query.get('accountId')
+    if (verify === 'gmail' && accountId) {
+      setVerificationAccountId(accountId)
+      setOtp('')
+      setOtpError(qMessage || '')
+      clearQuery()
+    } else if (connected === 'gmail') {
       notify('Gmail account connected successfully.')
       clearQuery()
     } else if (qError) {
@@ -73,6 +95,64 @@ export default function EmailAccountsPage() {
       clearQuery()
     }
   }, [query, notify, clearQuery])
+
+  useEffect(() => {
+    if (!verificationAccountId) return undefined
+    const timer = window.setInterval(() => setCountdownNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [verificationAccountId])
+
+  function openVerification(account) {
+    setVerificationAccountId(account.id)
+    setOtp('')
+    setOtpError('')
+  }
+
+  async function submitOtp(event) {
+    event.preventDefault()
+    if (!verificationAccount || otpBusy) return
+    setOtpBusy(true)
+    setOtpError('')
+    try {
+      const updated = await verifyEmailAccount(verificationAccount.id, otp)
+      setList((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setVerificationAccountId('')
+      setOtp('')
+      notify('Gmail account verified and ready for campaigns.', 'success')
+    } catch (requestError) {
+      setOtpError(requestError.message || 'Unable to verify this code.')
+      if (['OTP_EXPIRED', 'OTP_ATTEMPTS_EXHAUSTED'].includes(requestError.code)) {
+        setList((current) => current.map((item) => item.id === verificationAccount.id
+          ? { ...item, verificationStatus: 'expired', otpExpiresAt: null, otpAttemptsRemaining: 0 }
+          : item))
+      }
+      if (requestError.data?.attemptsRemaining !== undefined) {
+        setList((current) => current.map((item) => item.id === verificationAccount.id
+          ? { ...item, otpAttemptsRemaining: requestError.data.attemptsRemaining }
+          : item))
+      }
+      if (requestError.code === 'GMAIL_RECONNECT_REQUIRED') await load()
+    } finally {
+      setOtpBusy(false)
+    }
+  }
+
+  async function resendOtp() {
+    if (!verificationAccount || otpResending) return
+    setOtpResending(true)
+    setOtpError('')
+    try {
+      const updated = await resendEmailAccountOtp(verificationAccount.id)
+      setList((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setOtp('')
+      setCountdownNow(Date.now())
+      notify(`Verification email sent to ${updated.email}.`, 'success')
+    } catch (requestError) {
+      setOtpError(requestError.message || 'Unable to resend the verification email.')
+    } finally {
+      setOtpResending(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -123,14 +203,6 @@ export default function EmailAccountsPage() {
   }, [])
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
-  const closeModal = () => {
-    if (busy) return
-    setModalOpen(false)
-    setProvider('')
-    setForm(initialForm)
-    setFormMessage('')
-  }
-
   const openProvider = (initialProvider) => {
     if (initialProvider === 'gmail') {
       startGmailConnect()
@@ -237,11 +309,26 @@ export default function EmailAccountsPage() {
               <div>
                 <strong>{account.provider === 'gmail' ? 'Gmail' : 'SMTP'}</strong>
                 <p>{account.email}</p>
-                <span className="status-badge status-sent">
-                  <span className="status-dot" /> Connected{account.isDefault ? ' · Default' : ''}
-                </span>
+                {account.provider === 'gmail' ? (
+                  <span className={`status-badge ${account.connectionStatus === 'reconnect_required' || account.verificationStatus === 'expired' ? 'status-failed' : account.verificationStatus === 'verified' ? 'status-sent' : 'status-pending'}`}>
+                    {account.verificationStatus === 'verified' && account.connectionStatus !== 'reconnect_required' ? <ShieldCheck size={14} /> : <ShieldAlert size={14} />}
+                    {account.connectionStatus === 'reconnect_required' ? 'Reconnect Required' : account.verificationStatus === 'verified' ? 'Verified' : account.verificationStatus === 'expired' ? 'Verification Expired' : 'Verification Pending'}
+                    {account.isDefault ? ' · Default' : ''}
+                  </span>
+                ) : (
+                  <span className="status-badge status-sent"><span className="status-dot" />Connected{account.isDefault ? ' · Default' : ''}</span>
+                )}
               </div>
               <div className="account-actions">
+                {account.provider === 'gmail' && (account.verificationStatus !== 'verified' || account.connectionStatus === 'reconnect_required') && (
+                  <button
+                    className="button button-primary button-small"
+                    type="button"
+                    onClick={() => account.connectionStatus === 'reconnect_required' ? openProvider('gmail') : openVerification(account)}
+                  >
+                    {account.connectionStatus === 'reconnect_required' ? 'Reconnect with Google' : account.verificationStatus === 'expired' ? 'Resend OTP' : 'Verify'}
+                  </button>
+                )}
                 <Link className="button button-secondary button-small" to="/send">
                   Send Email
                 </Link>
@@ -367,6 +454,57 @@ export default function EmailAccountsPage() {
                 </div>
               </form>
             )}
+          </section>
+        </div>
+      )}
+
+      {verificationAccount && (
+        <div className="dialog-backdrop" role="presentation">
+          <section className="confirm-dialog connect-dialog" role="dialog" aria-modal="true" aria-labelledby="verify-title">
+            <button className="icon-button connect-close" onClick={() => setVerificationAccountId('')} aria-label="Close verification" type="button" disabled={otpBusy || otpResending}>
+              <X size={18} />
+            </button>
+            <span className="section-kicker">GMAIL ACCOUNT VERIFICATION</span>
+            <h2 id="verify-title">Verify {verificationAccount.email}</h2>
+            <p>Enter the 6-digit code sent from this Gmail account. It is valid for 5 minutes.</p>
+            {otpError && <p className="login-error" role="alert">{otpError}</p>}
+            {verificationAccount.otpExpiresAt && verificationAccount.verificationStatus === 'pending' && (
+              <p className="muted-cell" aria-live="polite">
+                Code expires in {Math.max(0, Math.ceil((new Date(verificationAccount.otpExpiresAt).getTime() - countdownNow) / 1000))} seconds
+                {' · '}{verificationAccount.otpAttemptsRemaining} attempts remaining
+              </p>
+            )}
+            <form className="page-stack" onSubmit={submitOtp}>
+              <label className="field-label" htmlFor="gmail-verification-code">6-digit code</label>
+              <input
+                id="gmail-verification-code"
+                className="text-input"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={otp}
+                onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                disabled={otpBusy}
+                required
+              />
+              <div className="dialog-actions">
+                <button className="button button-secondary" type="button" onClick={() => void resendOtp()} disabled={otpResending || otpBusy || Boolean(verificationAccount.otpResendAvailableAt && new Date(verificationAccount.otpResendAvailableAt).getTime() > countdownNow)}>
+                  <RefreshCw size={15} />
+                  {otpResending ? 'Sending…' : verificationAccount.otpResendAvailableAt && new Date(verificationAccount.otpResendAvailableAt).getTime() > countdownNow
+                    ? `Resend in ${Math.ceil((new Date(verificationAccount.otpResendAvailableAt).getTime() - countdownNow) / 1000)}s`
+                    : 'Resend OTP'}
+                </button>
+                <button className="button button-primary" type="submit" disabled={otpBusy || otp.length !== 6 || verificationAccount.verificationStatus !== 'pending'}>
+                  <Check size={15} />{otpBusy ? 'Verifying…' : 'Verify account'}
+                </button>
+              </div>
+              {otpError.toLowerCase().includes('reconnect') && (
+                <button className="button button-secondary" type="button" onClick={() => void startGmailConnect()} disabled={gmailBusy}>
+                  Reconnect with Google
+                </button>
+              )}
+            </form>
           </section>
         </div>
       )}

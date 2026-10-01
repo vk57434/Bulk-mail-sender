@@ -71,6 +71,8 @@ async function publishJobStatus(job, recipient, campaignId) {
     await job.updateProgress({
       campaignId: String(campaignId),
       recipientId: String(recipient._id),
+      emailAccountId: recipient.emailAccountId ? String(recipient.emailAccountId) : null,
+      senderEmail: recipient.senderEmail || '',
       status: recipient.status,
       error: recipient.error || '',
       processingAt: recipient.processingAt || null,
@@ -85,13 +87,16 @@ async function publishJobStatus(job, recipient, campaignId) {
 }
 
 async function markProcessing(recipient, campaignId, job) {
-  recipient.status = 'processing';
-  recipient.processingAt = new Date();
-  recipient.error = '';
-  await recipient.save();
-  await publishJobStatus(job, recipient, campaignId);
-  logger.info({ campaignId, recipientId: recipient._id, status: 'processing' }, '[Worker] Processing recipient');
-  logger.info({ campaignId, recipientId: recipient._id, email: recipient.email }, '[EMAIL] Processing');
+  const claimed = await Recipient.findOneAndUpdate(
+    { _id: recipient._id, campaignId, status: 'pending' },
+    { $set: { status: 'processing', processingAt: new Date(), error: '' } },
+    { new: true },
+  );
+  if (!claimed) return null;
+  await publishJobStatus(job, claimed, campaignId);
+  logger.info({ campaignId, recipientId: claimed._id, status: 'processing' }, '[Worker] Processing recipient');
+  logger.info({ campaignId, recipientId: claimed._id, email: claimed.email }, '[EMAIL] Processing');
+  return claimed;
 }
 
 async function markSent(recipient, campaignId, job, providerMessageId) {
@@ -139,19 +144,32 @@ async function processEmailJob(job) {
     logger.warn({ campaignId }, 'Campaign not found for job');
     return;
   }
-
   if (campaign.status === 'paused' || campaign.status === 'cancelled') {
     logger.info({ campaignId, status: campaign.status }, 'Campaign will not process this job');
     return;
   }
 
-  const recipient = await Recipient.findOne({ _id: recipientId, campaignId });
+  let recipient = await Recipient.findOne({ _id: recipientId, campaignId });
   if (!recipient) {
     logger.warn({ campaignId, recipientId }, 'Recipient not found for job');
     return;
   }
-  if (recipient.status === 'sent' || recipient.status === 'cancelled') {
+  if (['sent', 'failed', 'cancelled'].includes(recipient.status)) {
     logger.info({ recipientId }, '[CAMPAIGN] Recipient already terminal; skipping duplicate send');
+    return;
+  }
+  if (recipient.status === 'processing') {
+    const processingAgeMs = recipient.processingAt ? Date.now() - recipient.processingAt.getTime() : 0;
+    if (job.attemptsMade > 0 || processingAgeMs > 30000) {
+      await markFailed(
+        recipient,
+        String(campaign._id),
+        new Error('Delivery outcome is unknown after an interrupted send; automatic retry stopped to avoid a duplicate.'),
+        job,
+      );
+      await emitCampaignProgress(String(campaign._id));
+      await updateCampaignStatus(campaignId);
+    }
     return;
   }
 
@@ -162,23 +180,46 @@ async function processEmailJob(job) {
     return;
   }
 
-  await markProcessing(recipient, String(campaign._id), job);
+  recipient = await markProcessing(recipient, String(campaign._id), job);
+  if (!recipient) return;
   await emitCampaignProgress(String(campaign._id));
 
   let account = null;
-  if (campaign.emailAccountId) {
-    account = await EmailAccount.findOne({ _id: campaign.emailAccountId, userId: campaign.userId || null }).select('+encryptedCredentials');
+  const senderAccountId = recipient.emailAccountId || campaign.emailAccountId;
+  if (senderAccountId) {
+    account = await EmailAccount.findOne({ _id: senderAccountId, userId: campaign.userId || null }).select('+encryptedCredentials');
     if (!account) {
       await markFailed(recipient, String(campaign._id), new Error('Campaign email account could not be loaded.'), job);
       await emitCampaignProgress(String(campaign._id));
       await updateCampaignStatus(campaignId);
       return;
     }
+    if (account.provider === 'gmail' && account.verificationStatus !== 'verified') {
+      await markFailed(recipient, String(campaign._id), new Error('Assigned Gmail account is no longer verified. Reconnect and verify it; this recipient was not reassigned.'), job);
+      await emitCampaignProgress(String(campaign._id));
+      await updateCampaignStatus(campaignId);
+      return;
+    }
+    if (account.connectionStatus === 'reconnect_required') {
+      await markFailed(recipient, String(campaign._id), new Error('Assigned Gmail account requires reconnection. The recipient was not reassigned.'), job);
+      await emitCampaignProgress(String(campaign._id));
+      await updateCampaignStatus(campaignId);
+      return;
+    }
   }
 
+  let providerAccepted = false;
   try {
     await enforceRateLimit();
-    logger.info({ jobId: job.id, campaignId, recipientId, email: recipient.email, provider: account ? account.provider : 'smtp-fallback' }, '[CAMPAIGN] Email send started');
+    logger.info({
+      jobId: job.id,
+      campaignId,
+      recipientId,
+      email: recipient.email,
+      emailAccountId: account ? String(account._id) : null,
+      senderEmail: account?.email || recipient.senderEmail || '',
+      provider: account ? account.provider : 'smtp-fallback',
+    }, '[CAMPAIGN] Email send started');
     const renderedHtml = replaceTemplateVariables(campaign.html, {
       name: recipient.name || recipient.email.split('@')[0],
       email: recipient.email,
@@ -205,7 +246,6 @@ async function processEmailJob(job) {
     } else {
       response = await sendMail({
         to: recipient.email,
-        from: account ? account.email : undefined,
         subject: finalSubject,
         html: finalHtml,
         text: finalText,
@@ -217,16 +257,22 @@ async function processEmailJob(job) {
     const acceptedByProvider = accepted.includes(recipientEmail) || (typeof response?.messageId === 'string' && accepted.length > 0);
     if (!acceptedByProvider) throw new Error('Email provider did not accept the email');
 
+    providerAccepted = true;
     recipient.attempts += 1;
     lastEmailSentAt = Date.now();
-    logger.info({ campaignId, recipientId, status: 'sent' }, '[Worker] Gmail send accepted');
-    logger.info({ campaignId, recipientId, email: recipient.email, messageId: response.messageId }, '[CAMPAIGN] Gmail accepted email');
+    logger.info({
+      campaignId,
+      recipientId,
+      emailAccountId: account ? String(account._id) : null,
+      senderEmail: account?.email || recipient.senderEmail || '',
+      status: 'sent',
+    }, '[Worker] Email accepted by provider');
     await markSent(recipient, String(campaign._id), job, response.messageId);
-    logger.info({ campaignId, recipientId, status: 'sent' }, '[Worker] Recipient marked sent');
   } catch (error) {
     recipient.attempts += 1;
+    if (providerAccepted) error.deliveryOutcome = 'unknown';
     const maxAttempts = job.opts?.attempts || 1;
-    const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts;
+    const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts || error?.deliveryOutcome === 'unknown';
     if (account && error?.reconnectRequired && isFinalAttempt) {
       markAccountReconnectRequired(account._id).catch(() => null);
     }
@@ -242,7 +288,6 @@ async function processEmailJob(job) {
     }
   }
 
-  logger.info({ campaignId }, '[CAMPAIGN] Campaign state recalculated');
   await emitCampaignProgress(String(campaign._id));
   await updateCampaignStatus(campaignId);
 }

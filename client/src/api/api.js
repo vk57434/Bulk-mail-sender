@@ -43,7 +43,9 @@ api.interceptors.response.use(
     }
     const message = error.code === 'ERR_NETWORK'
       ? 'Unable to connect to MailFlow. Please try again.'
-      : messages[status] || 'Something went wrong. Please try again.'
+      : status === 401
+        ? messages[status]
+        : error.response?.data?.message || messages[status] || 'Something went wrong. Please try again.'
     return Promise.reject(Object.assign(new Error(message), {
       status,
       code: error.response?.data?.code || error.code,

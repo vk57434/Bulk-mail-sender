@@ -24,7 +24,7 @@ export default function BulkSendPage() {
   const navigate = useNavigate();
   const { notify } = useToast();
   const fileInputRef = useRef(null);
-
+  const departmentValidationRef = useRef(0);
   const [step, setStep] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [accountList, setAccountList] = useState([]);
@@ -34,9 +34,11 @@ export default function BulkSendPage() {
   const [csvFile, setCsvFile] = useState(null);
   const [recipientCount, setRecipientCount] = useState(0);
   const [validationResult, setValidationResult] = useState(null);
+  const [selectedDepartments, setSelectedDepartments] = useState([]);
   const [validationLoading, setValidationLoading] = useState(false);
   const [form, setForm] = useState({
     accountId: "",
+    accountMode: "specific",
     campaignName: "",
     subject: "",
     html: "",
@@ -50,9 +52,10 @@ export default function BulkSendPage() {
         if (cancelled) return;
         setAccountList(a);
         if (a.length) {
+          const eligible = a.filter((item) => item.provider !== "gmail" || item.verificationStatus === "verified");
           setForm((f) => ({
             ...f,
-            accountId: (a.find((x) => x.isDefault) || a[0])?.id || "",
+            accountId: (eligible.find((x) => x.isDefault) || eligible[0])?.id || "",
           }));
         }
       } catch {
@@ -69,22 +72,57 @@ export default function BulkSendPage() {
 
   async function handleFileSelect(file) {
     if (!file) return;
+    const requestId = ++departmentValidationRef.current;
     setCsvFile(file);
+    setSelectedDepartments([]);
     setValidationResult(null);
     setRecipientCount(0);
     setValidationLoading(true);
     try {
       const result = await validateRecipients(file);
-      setValidationResult(result);
-      setRecipientCount(result.totalRows);
+      if (requestId === departmentValidationRef.current) {
+        setValidationResult(result);
+        setSelectedDepartments(result.hasDepartments ? result.departments.map((department) => department.name) : []);
+        setRecipientCount(result.totalRows);
+      }
     } catch (error) {
-      if (error.data) {
+      if (requestId === departmentValidationRef.current && error.data) {
         setValidationResult(error.data);
         setRecipientCount(error.data.totalRows || 0);
       }
-      notify(error.message || "CSV validation failed", "error");
+      if (requestId === departmentValidationRef.current) notify(error.message || "CSV validation failed", "error");
     } finally {
-      setValidationLoading(false);
+      if (requestId === departmentValidationRef.current) setValidationLoading(false);
+    }
+  }
+
+  async function updateDepartmentSelection(nextSelection) {
+    setSelectedDepartments(nextSelection);
+    if (!csvFile) return;
+    if (nextSelection.length === 0) {
+      departmentValidationRef.current += 1;
+      const requestId = departmentValidationRef.current;
+      setValidationLoading(true);
+      try {
+        const result = await validateRecipients(csvFile);
+        if (requestId === departmentValidationRef.current) setValidationResult(result);
+      } catch (error) {
+        if (requestId === departmentValidationRef.current) notify(error.message || "CSV validation failed", "error");
+      } finally {
+        if (requestId === departmentValidationRef.current) setValidationLoading(false);
+      }
+      return;
+    }
+
+    const requestId = ++departmentValidationRef.current;
+    setValidationLoading(true);
+    try {
+      const result = await validateRecipients(csvFile, nextSelection);
+      if (requestId === departmentValidationRef.current) setValidationResult(result);
+    } catch (error) {
+      if (requestId === departmentValidationRef.current) notify(error.message || "Department validation failed", "error");
+    } finally {
+      if (requestId === departmentValidationRef.current) setValidationLoading(false);
     }
   }
 
@@ -118,7 +156,8 @@ export default function BulkSendPage() {
         name: form.campaignName,
         subject: form.subject,
         html: form.html,
-        emailAccountId: form.accountId || undefined,
+        emailAccountMode: form.accountMode,
+        emailAccountId: form.accountMode === "specific" ? form.accountId || undefined : undefined,
       });
 
       // Step 2: Upload recipients
@@ -128,6 +167,7 @@ export default function BulkSendPage() {
           csvFile,
           setUploadProgress,
           continueWithValid,
+          selectedDepartments,
         );
       }
 
@@ -153,6 +193,17 @@ export default function BulkSendPage() {
       validationResult.duplicates > 0 ||
       validationResult.suppressed > 0),
   );
+  const departmentOptions = validationResult?.departments || [];
+  const selectedDepartmentCount = selectedDepartments.length === 0
+    ? Number(validationResult?.totalRows || 0)
+    : departmentOptions
+    .filter((department) => selectedDepartments.includes(department.name))
+    .reduce((total, department) => total + department.count, 0);
+  const excludedDepartmentCount = Math.max(0, (validationResult?.totalRows || 0) - selectedDepartmentCount);
+  const departmentSamples = (isSelected) => departmentOptions
+    .filter((department) => selectedDepartments.length === 0 ? isSelected : selectedDepartments.includes(department.name) === isSelected)
+    .flatMap((department) => department.samples || [])
+    .slice(0, 5);
 
   if (!accountList.length) {
     return (
@@ -162,6 +213,15 @@ export default function BulkSendPage() {
         <Link className="button button-primary" to="/email-accounts">
           Connect Email
         </Link>
+      </section>
+    );
+  }
+  if (!accountList.some((account) => account.provider !== "gmail" || account.verificationStatus === "verified")) {
+    return (
+      <section className="panel empty-state">
+        <h1>Verify a Gmail account first</h1>
+        <p>Gmail accounts must be verified before they can send campaign emails.</p>
+        <Link className="button button-primary" to="/email-accounts">Verify Gmail</Link>
       </section>
     );
   }
@@ -188,18 +248,36 @@ export default function BulkSendPage() {
         {step === 1 && (
           <>
             <div className="form-group">
-              <label>From Account</label>
+              <label htmlFor="account-mode">Sending account</label>
               <select
-                value={form.accountId}
-                onChange={(e) => set("accountId", e.target.value)}
+                id="account-mode"
+                value={form.accountMode}
+                onChange={(e) => set("accountMode", e.target.value)}
                 className="form-select"
               >
-                {accountList.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.provider === "gmail" ? "Gmail" : "SMTP"} · {a.email}
-                  </option>
-                ))}
+                <option value="specific">One connected account</option>
+                <option value="round_robin" disabled={!accountList.some((a) => a.provider === "gmail" && a.verificationStatus === "verified")}>
+                  Automatic round-robin across Gmail accounts
+                </option>
               </select>
+              {form.accountMode === "specific" ? (
+                <select
+                  aria-label="Select sending account"
+                  value={form.accountId}
+                  onChange={(e) => set("accountId", e.target.value)}
+                  className="form-select"
+                >
+                  {accountList.map((a) => (
+                    <option key={a.id} value={a.id} disabled={a.provider === "gmail" && a.verificationStatus !== "verified"}>
+                      {a.provider === "gmail" ? `Gmail · ${a.verificationStatus === "verified" ? "Verified" : "Verification required"}` : "SMTP"} · {a.email}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="muted-cell">
+                  {accountList.filter((a) => a.provider === "gmail" && a.verificationStatus === "verified").map((a) => `${a.email} · Verified`).join(" · ")}
+                </p>
+              )}
             </div>
 
             <div className="form-group">
@@ -217,6 +295,46 @@ export default function BulkSendPage() {
                   {recipientCount} recipient
                   {recipientCount !== 1 ? "s" : ""}
                 </p>
+              )}
+              {validationResult?.hasDepartments && (
+                <div className="department-selector">
+                  <div className="panel-heading panel-heading-inline">
+                    <div>
+                      <h3>Select recipients</h3>
+                      <p>Choose departments to include. Clearing the selection includes all valid recipients.</p>
+                    </div>
+                    <div className="button-group">
+                      <button className="button button-secondary button-small" type="button" onClick={() => void updateDepartmentSelection(departmentOptions.map((department) => department.name))} disabled={validationLoading}>Select All</button>
+                      <button className="button button-secondary button-small" type="button" onClick={() => void updateDepartmentSelection([])} disabled={validationLoading}>Clear Selection</button>
+                    </div>
+                  </div>
+                  <div className="department-options">
+                    {departmentOptions.map((department) => (
+                      <label className="department-option" key={department.key || "__no_department__"}>
+                        <input
+                          type="checkbox"
+                          checked={selectedDepartments.includes(department.name)}
+                          disabled={validationLoading}
+                          onChange={(event) => {
+                            const next = event.target.checked
+                              ? [...selectedDepartments, department.name]
+                              : selectedDepartments.filter((name) => name !== department.name);
+                            void updateDepartmentSelection(next);
+                          }}
+                        />
+                        <span>{department.label || department.name}</span>
+                        <strong>{department.count}</strong>
+                      </label>
+                    ))}
+                  </div>
+                  <p><strong>Selected recipients:</strong> {selectedDepartmentCount} <span className="muted-cell">·</span> <strong>Excluded recipients:</strong> {excludedDepartmentCount}</p>
+                  {departmentSamples(true).length > 0 && (
+                    <p className="muted-cell">Selected preview: {departmentSamples(true).map((item) => item.email).join(", ")}</p>
+                  )}
+                  {departmentSamples(false).length > 0 && (
+                    <p className="muted-cell">Excluded preview: {departmentSamples(false).map((item) => item.email).join(", ")}</p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -328,9 +446,16 @@ export default function BulkSendPage() {
                 </p>
                 <p>
                   <strong>From:</strong>{" "}
-                  {accountList.find((a) => a.id === form.accountId)?.email ||
-                    "Default"}
+                  {form.accountMode === "round_robin"
+                    ? "Automatic round-robin"
+                    : accountList.find((a) => a.id === form.accountId)?.email || "Default"}
                 </p>
+                {form.accountMode === "round_robin" && (
+                  <p>
+                    <strong>Gmail accounts:</strong>{" "}
+                    {accountList.filter((a) => a.provider === "gmail" && a.verificationStatus === "verified").map((a) => `${a.email} · Verified`).join(" · ")}
+                  </p>
+                )}
               </div>
 
               <div className="review-card">
@@ -347,6 +472,13 @@ export default function BulkSendPage() {
                     <p>
                       <strong>Total Rows:</strong> {validationResult.totalRows}
                     </p>
+                    {validationResult.hasDepartments && (
+                      <>
+                        <p><strong>Selected recipients:</strong> {selectedDepartmentCount}</p>
+                        <p><strong>Excluded recipients:</strong> {excludedDepartmentCount}</p>
+                        <p><strong>Departments:</strong> {selectedDepartments.length ? selectedDepartments.map((department) => department || "No department").join(", ") : "All departments (no filter)"}</p>
+                      </>
+                    )}
                     <p>
                       <strong>Valid Recipients:</strong>{" "}
                       <span className="recipient-count valid">

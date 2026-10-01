@@ -35,17 +35,19 @@ export async function runCampaignAction(id, action) {
   return data.data
 }
 
-export async function validateRecipients(file) {
+export async function validateRecipients(file, selectedDepartments) {
   const body = new FormData()
   body.append('file', file)
+  if (selectedDepartments !== undefined) body.append('selectedDepartments', JSON.stringify(selectedDepartments))
   const { data } = await api.post('/campaigns/recipients/validate', body)
   return data.data
 }
 
-export async function uploadRecipients(id, file, onUploadProgress, allowInvalid = false) {
+export async function uploadRecipients(id, file, onUploadProgress, allowInvalid = false, selectedDepartments) {
   const body = new FormData()
   body.append('allowInvalid', String(allowInvalid))
   body.append('file', file)
+  if (selectedDepartments !== undefined) body.append('selectedDepartments', JSON.stringify(selectedDepartments))
   const { data } = await api.post(`/campaigns/${id}/recipients/upload`, body, {
     onUploadProgress: (event) => {
       if (event.total) onUploadProgress(Math.round((event.loaded * 100) / event.total))

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Check, FileSpreadsheet, MailPlus } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
@@ -10,6 +10,7 @@ import {
   validateRecipients,
 } from "../services/campaign.service";
 import useToast from "../hooks/useToast";
+import { accounts } from "../services/mailflow.service";
 import CsvUploader from "../components/CsvUploader";
 import EmailEditor from "../components/EmailEditor";
 import ErrorState from "../components/ErrorState";
@@ -20,14 +21,35 @@ export default function CampaignFormPage() {
   const editing = Boolean(id);
   const navigate = useNavigate();
   const { notify } = useToast();
-  const [form, setForm] = useState({ name: "", subject: "", html: "" });
+  const departmentValidationRef = useRef(0);
+  const [form, setForm] = useState({ name: "", subject: "", html: "", emailAccountMode: "specific", emailAccountId: "" });
+  const [accountList, setAccountList] = useState([]);
   const [file, setFile] = useState(null);
   const [validationResult, setValidationResult] = useState(null);
+  const [selectedDepartments, setSelectedDepartments] = useState([]);
+  const [validatingDepartments, setValidatingDepartments] = useState(false);
   const [loading, setLoading] = useState(editing);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    accounts()
+      .then((items) => {
+        if (!active) return;
+        setAccountList(items);
+        setForm((current) => ({
+          ...current,
+          emailAccountId: current.emailAccountId || (items.filter((item) => item.provider !== "gmail" || item.verificationStatus === "verified").find((item) => item.isDefault) || items.find((item) => item.provider !== "gmail" || item.verificationStatus === "verified"))?.id || "",
+        }));
+      })
+      .catch((requestError) => active && setError(requestError.message));
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!editing) return undefined;
@@ -39,6 +61,8 @@ export default function CampaignFormPage() {
             name: campaign.name || "",
             subject: campaign.subject || "",
             html: campaign.html || "",
+            emailAccountMode: campaign.emailAccountMode || "specific",
+            emailAccountId: campaign.emailAccountId?._id || campaign.emailAccountId || "",
           });
           if (campaign.status !== "draft")
             setError("Only draft campaigns can be edited.");
@@ -56,9 +80,55 @@ export default function CampaignFormPage() {
   }
 
   function attachFile(nextFile) {
+    const requestId = ++departmentValidationRef.current;
     setFile(nextFile);
+    setSelectedDepartments([]);
     setValidationResult(null);
     setError("");
+    if (nextFile) {
+      setValidatingDepartments(true);
+      validateRecipients(nextFile)
+        .then((result) => {
+          if (departmentValidationRef.current === requestId) {
+            setValidationResult(result);
+            setSelectedDepartments(result.hasDepartments ? result.departments.map((department) => department.name) : []);
+          }
+        })
+        .catch((requestError) => {
+          if (departmentValidationRef.current === requestId) setError(requestError.message);
+        })
+        .finally(() => {
+          if (departmentValidationRef.current === requestId) setValidatingDepartments(false);
+        });
+    }
+  }
+
+  async function updateDepartmentSelection(nextSelection) {
+    setSelectedDepartments(nextSelection);
+    if (!file) return;
+    if (!nextSelection.length) {
+      const requestId = ++departmentValidationRef.current;
+      setValidatingDepartments(true);
+      try {
+        const result = await validateRecipients(file);
+        if (requestId === departmentValidationRef.current) setValidationResult(result);
+      } catch (requestError) {
+        if (requestId === departmentValidationRef.current) setError(requestError.message);
+      } finally {
+        if (requestId === departmentValidationRef.current) setValidatingDepartments(false);
+      }
+      return;
+    }
+    const requestId = ++departmentValidationRef.current;
+    setValidatingDepartments(true);
+    try {
+      const result = await validateRecipients(file, nextSelection);
+      if (requestId === departmentValidationRef.current) setValidationResult(result);
+    } catch (requestError) {
+      if (requestId === departmentValidationRef.current) setError(requestError.message);
+    } finally {
+      if (requestId === departmentValidationRef.current) setValidatingDepartments(false);
+    }
   }
 
   async function uploadFile(campaignId, nextFile, allowInvalid) {
@@ -70,6 +140,7 @@ export default function CampaignFormPage() {
         nextFile,
         setUploadProgress,
         allowInvalid,
+        selectedDepartments,
       );
       notify(
         `Recipients uploaded: ${result.valid} valid, ${result.duplicates} duplicates, ${result.invalid} invalid, ${result.suppressed} suppressed`,
@@ -93,11 +164,11 @@ export default function CampaignFormPage() {
     let campaign;
     try {
       if (file) {
-        let result = validationResult;
-        if (!result) {
-          result = await validateRecipients(file);
-          setValidationResult(result);
-        }
+        const result = await validateRecipients(
+          file,
+          selectedDepartments.length ? selectedDepartments : undefined,
+        );
+        setValidationResult(result);
         const hasIssues =
           result.invalid > 0 || result.duplicates > 0 || result.suppressed > 0;
         if (hasIssues && !allowInvalid) {
@@ -115,7 +186,7 @@ export default function CampaignFormPage() {
         try {
           await uploadFile(campaign._id, file, allowInvalid);
         } catch (uploadError) {
-          if (uploadError.code === "CSV_VALIDATION_FAILED") {
+          if (["CSV_VALIDATION_FAILED", "DEPARTMENTS_REQUIRED", "INVALID_DEPARTMENT_SELECTION"].includes(uploadError.code)) {
             if (!editing) await removeCampaign(campaign._id).catch(() => null);
             setValidationResult(uploadError.data);
             setError(
@@ -137,6 +208,16 @@ export default function CampaignFormPage() {
       setSaving(false);
     }
   }
+
+  const departmentOptions = validationResult?.departments || [];
+  const selectedDepartmentCount = departmentOptions
+    .filter((department) => selectedDepartments.length === 0 || selectedDepartments.includes(department.name))
+    .reduce((total, department) => total + department.count, 0);
+  const excludedDepartmentCount = Math.max(0, (validationResult?.totalRows || 0) - selectedDepartmentCount);
+  const departmentSamples = (isSelected) => departmentOptions
+    .filter((department) => selectedDepartments.length === 0 ? isSelected : selectedDepartments.includes(department.name) === isSelected)
+    .flatMap((department) => department.samples || [])
+    .slice(0, 5);
 
   if (loading) return <Loading label="Loading campaign..." />;
   return (
@@ -206,6 +287,36 @@ export default function CampaignFormPage() {
               <h2>Write your email</h2>
               <p>HTML is supported. Preview runs in a restricted sandbox.</p>
             </div>
+            <div className="field-group">
+              <label className="field-label" htmlFor="campaign-account-mode">Sending account</label>
+              <select
+                id="campaign-account-mode"
+                className="text-input"
+                value={form.emailAccountMode}
+                onChange={(event) => updateField("emailAccountMode", event.target.value)}
+              >
+                <option value="specific">One connected account</option>
+                <option value="round_robin" disabled={!accountList.some((item) => item.provider === "gmail" && item.verificationStatus === "verified")}>
+                  Automatic round-robin across Gmail accounts
+                </option>
+              </select>
+              {form.emailAccountMode === "specific" ? (
+                <select
+                  className="text-input"
+                  aria-label="Select sending account"
+                  value={form.emailAccountId}
+                  onChange={(event) => updateField("emailAccountId", event.target.value)}
+                >
+                  {accountList.map((item) => (
+                    <option key={item.id} value={item.id} disabled={item.provider === "gmail" && item.verificationStatus !== "verified"}>{item.provider === "gmail" ? `Gmail · ${item.verificationStatus === "verified" ? "Verified" : "Verification required"}` : "SMTP"} · {item.email}</option>
+                  ))}
+                </select>
+              ) : (
+                <p className="muted-cell">
+                  {accountList.filter((item) => item.provider === "gmail" && item.verificationStatus === "verified").map((item) => `${item.email} · Verified`).join(" · ")}
+                </p>
+              )}
+            </div>
           </div>
           <EmailEditor
             value={form.html}
@@ -237,6 +348,43 @@ export default function CampaignFormPage() {
           {file && (
             <div className="selected-file-line">
               <Check size={15} /> {file.name} selected
+            </div>
+          )}
+          {validatingDepartments && <p className="muted-cell">Checking CSV departments…</p>}
+          {validationResult?.hasDepartments && (
+            <div className="department-selector">
+              <div className="panel-heading panel-heading-inline">
+                <div>
+                  <h3>Select recipients</h3>
+                  <p>Choose departments to include. Clearing the selection includes all valid recipients.</p>
+                </div>
+                <div className="button-group">
+                  <button className="button button-secondary button-small" type="button" onClick={() => void updateDepartmentSelection(departmentOptions.map((department) => department.name))} disabled={validatingDepartments || saving}>Select All</button>
+                  <button className="button button-secondary button-small" type="button" onClick={() => void updateDepartmentSelection([])} disabled={validatingDepartments || saving}>Clear Selection</button>
+                </div>
+              </div>
+              <div className="department-options">
+                {departmentOptions.map((department) => (
+                  <label className="department-option" key={department.key || "__no_department__"}>
+                    <input
+                      type="checkbox"
+                      checked={selectedDepartments.includes(department.name)}
+                      disabled={validatingDepartments || saving}
+                      onChange={(event) => {
+                        const next = event.target.checked
+                          ? [...selectedDepartments, department.name]
+                          : selectedDepartments.filter((name) => name !== department.name);
+                        void updateDepartmentSelection(next);
+                      }}
+                    />
+                    <span>{department.label || department.name}</span>
+                    <strong>{department.count}</strong>
+                  </label>
+                ))}
+              </div>
+              <p><strong>Selected recipients:</strong> {selectedDepartmentCount} <span className="muted-cell">·</span> <strong>Excluded recipients:</strong> {excludedDepartmentCount}</p>
+              {departmentSamples(true).length > 0 && <p className="muted-cell">Selected preview: {departmentSamples(true).map((item) => item.email).join(", ")}</p>}
+              {departmentSamples(false).length > 0 && <p className="muted-cell">Excluded preview: {departmentSamples(false).map((item) => item.email).join(", ")}</p>}
             </div>
           )}
           {validationResult && (
@@ -296,6 +444,7 @@ export default function CampaignFormPage() {
               disabled={
                 saving ||
                 uploading ||
+                validatingDepartments ||
                 (validationResult && validationResult.valid === 0)
               }
             >

@@ -12,6 +12,35 @@ const CampaignSchema = new mongoose.Schema(
       ref: 'EmailAccount',
       default: null,
     },
+    emailAccountMode: {
+      type: String,
+      enum: ['specific', 'round_robin'],
+      default: 'specific',
+    },
+    selectedEmailAccounts: {
+      type: [{
+        emailAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailAccount', required: true },
+        email: { type: String, required: true },
+        provider: { type: String, required: true },
+      }],
+      default: [],
+    },
+    selectedDepartments: {
+      type: [String],
+      default: [],
+    },
+    csvRecipientCount: {
+      type: Number,
+      default: 0,
+    },
+    selectedRecipientCount: {
+      type: Number,
+      default: 0,
+    },
+    excludedRecipientCount: {
+      type: Number,
+      default: 0,
+    },
     name: {
       type: String,
       required: true,

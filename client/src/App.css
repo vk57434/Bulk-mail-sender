@@ -176,6 +176,15 @@ tbody tr:hover { background: var(--surface-alt); }
 .composer { max-width: 900px; padding: 26px; }
 .composer-row, .template-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .composer-actions, .account-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.department-selector { display: grid; gap: 10px; margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-alt); }
+.department-selector .panel-heading { align-items: center; }
+.department-selector h3 { margin: 0 0 3px; color: var(--ink); font-size: 13px; }
+.department-selector p { margin: 0; color: var(--muted); font-size: 10px; }
+.department-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
+.page-stack .department-option { min-height: 39px; display: grid; grid-template-columns: 17px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.page-stack .department-option input[type='checkbox'] { width: 15px; height: 15px; margin: 0; padding: 0; accent-color: var(--accent); }
+.department-option strong { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.department-selector .button-group { display: flex; flex-wrap: wrap; gap: 6px; }
 .success-message { color: var(--accent-ink); background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; }
 .account-grid { display: grid; gap: 13px; }
 .account-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; }

@@ -7,6 +7,7 @@ const config = require('../config/env');
 const { normalizeEmail, isValidEmail } = require('../utils/emailValidator');
 const logger = require('../utils/logger');
 const { recalculateCampaignCounters } = require('./campaign.service');
+const { cleanDepartment, inspectDepartments, filterRowsByDepartments } = require('../utils/department-filter');
 
 async function readCsvRows(filePath) {
   const rows = [];
@@ -35,6 +36,7 @@ function validateRows(rows, existingEmails = new Set(), suppressedEmails = new S
     stats.totalRows += 1;
     const name = String(row.name || '').trim();
     const email = normalizeEmail(row.email || '');
+    const department = cleanDepartment(row.department);
     const rowNumber = rowIndex + 2;
 
     if (!email || !isValidEmail(email)) {
@@ -76,6 +78,7 @@ function validateRows(rows, existingEmails = new Set(), suppressedEmails = new S
       userId: campaign?.userId || null,
       email,
       name,
+      department,
       status: 'pending',
       queuedAt: new Date(),
     });
@@ -93,18 +96,51 @@ async function getSuppressedEmails() {
   return new Set((await Suppression.find({}).select('email')).map((record) => record.email));
 }
 
-async function validateRecipientsFromCsv(filePath) {
+function summarizeDepartments(rows, selection = null) {
+  const detected = inspectDepartments(rows);
+  const departments = detected.departments.map((department) => ({
+    name: department.name,
+    key: department.key,
+    count: department.count,
+    samples: department.samples,
+  }));
+  if (detected.unassignedCount > 0 && detected.departments.length > 0) {
+    departments.push({
+      name: '',
+      label: 'No department',
+      key: '',
+      count: detected.unassignedCount,
+      samples: detected.unassignedSamples,
+    });
+  }
+  return {
+    departments,
+    hasDepartments: detected.departments.length > 0,
+    unassignedCount: detected.unassignedCount,
+    selectedDepartments: selection?.selectedDepartments || [],
+    selectedRecipientCount: selection?.selectedRows.length ?? 0,
+    excludedRecipientCount: selection?.excludedCount ?? rows.length,
+  };
+}
+
+async function validateRecipientsFromCsv(filePath, selectedDepartments) {
   const rows = await readCsvRows(filePath);
-  const validation = validateRows(rows, new Set(), await getSuppressedEmails());
+  const detected = inspectDepartments(rows);
+  const hasDepartments = detected.departments.length > 0;
+  const selection = hasDepartments
+    ? filterRowsByDepartments(rows, selectedDepartments)
+    : { selectedRows: rows, selectedDepartments: [], excludedCount: 0 };
+  const validation = validateRows(selection.selectedRows, new Set(), await getSuppressedEmails());
+  validation.totalRows = rows.length;
   logger.info({ totalRows: validation.totalRows }, '[CSV] Parsed rows');
   logger.info({ valid: validation.valid }, '[CSV] Valid recipients');
   logger.info({ invalid: validation.invalid }, '[CSV] Invalid recipients');
   const stats = { ...validation };
   delete stats.createdEntries;
-  return stats;
+  return { ...stats, ...summarizeDepartments(rows, selection), hasDepartments, selectionRequired: false };
 }
 
-async function importRecipientsFromCsv(filePath, campaignId, { allowInvalid = false } = {}) {
+async function importRecipientsFromCsv(filePath, campaignId, { allowInvalid = false, selectedDepartments } = {}) {
   const campaign = await Campaign.findById(campaignId);
   if (!campaign) {
     throw Object.assign(new Error('Campaign not found'), { statusCode: 404, code: 'CAMPAIGN_NOT_FOUND' });
@@ -113,7 +149,12 @@ async function importRecipientsFromCsv(filePath, campaignId, { allowInvalid = fa
   const existingRecipients = await Recipient.find({ campaignId }).select('email');
   const existingEmails = new Set(existingRecipients.map((recipient) => recipient.email));
   const rows = await readCsvRows(filePath);
-  const validation = validateRows(rows, existingEmails, await getSuppressedEmails(), campaign);
+  const detected = inspectDepartments(rows);
+  const selection = detected.departments.length > 0
+    ? filterRowsByDepartments(rows, selectedDepartments)
+    : { selectedRows: rows, selectedDepartments: [], excludedCount: 0 };
+  const validation = validateRows(selection.selectedRows, existingEmails, await getSuppressedEmails(), campaign);
+  validation.totalRows = rows.length;
   const { createdEntries } = validation;
   const stats = { ...validation };
   delete stats.createdEntries;
@@ -142,13 +183,31 @@ async function importRecipientsFromCsv(filePath, campaignId, { allowInvalid = fa
   }
 
   if (createdEntries.length > 0) {
+    createdEntries.forEach((entry, index) => {
+      entry.sequence = currentTotal + index;
+    });
     await Recipient.insertMany(createdEntries, { ordered: false });
   }
+
+  const campaignDepartments = [...new Set([
+    ...(campaign.selectedDepartments || []),
+    ...selection.selectedDepartments.map((department) => department || 'No department'),
+  ])];
+  campaign.csvRecipientCount = Number(campaign.csvRecipientCount || 0) + rows.length;
+  campaign.selectedRecipientCount = Number(campaign.selectedRecipientCount || 0) + selection.selectedRows.length;
+  campaign.excludedRecipientCount = Number(campaign.excludedRecipientCount || 0) + selection.excludedCount;
+  campaign.selectedDepartments = campaignDepartments;
+  await campaign.save();
 
   logger.info({ campaignId, imported: createdEntries.length }, 'Recipients imported');
   await recalculateCampaignCounters(campaignId);
 
-  return { ...stats, campaignId };
+  return {
+    ...stats,
+    ...summarizeDepartments(rows, selection),
+    hasDepartments: detected.departments.length > 0,
+    campaignId,
+  };
 }
 
 async function getRecipientsByCampaign(campaignId, { status, page = 1, limit = 50 }) {

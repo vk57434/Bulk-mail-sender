@@ -2,7 +2,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import { ArrowLeft, Ban, Check, Clock3, Edit3, FileSpreadsheet, Mail, Pause, Play, Trash2, Users, XCircle, Wifi, WifiOff } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { API_BASE_URL } from '../api/api'
-import { getCampaign, getCampaignEventsToken, getCampaignRecipients, getCampaignStats, removeCampaign, runCampaignAction, uploadRecipients } from '../services/campaign.service'
+import { getCampaign, getCampaignEventsToken, getCampaignRecipients, getCampaignStats, removeCampaign, runCampaignAction, uploadRecipients, validateRecipients } from '../services/campaign.service'
 import useToast from '../hooks/useToast'
 import CampaignProgress from '../components/CampaignProgress'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -52,6 +52,7 @@ export default function CampaignDetailPage() {
   const eventTokenRef = useRef('')
   const reconcileRef = useRef(null)
   const recipientEventsRef = useRef(new Map())
+  const uploadDepartmentRequestRef = useRef(0)
 
   const [campaign, setCampaign] = useState(null)
   const [stats, setStats] = useState(null)
@@ -67,6 +68,8 @@ export default function CampaignDetailPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadValidationResult, setUploadValidationResult] = useState(null)
   const [pendingUploadFile, setPendingUploadFile] = useState(null)
+  const [uploadSelectedDepartments, setUploadSelectedDepartments] = useState([])
+  const [uploadDepartmentValidationLoading, setUploadDepartmentValidationLoading] = useState(false)
   const [confirmation, setConfirmation] = useState('')
   const [lastUpdated, setLastUpdated] = useState(new Date())
   const [connectionStatus, setConnectionStatus] = useState('connecting')
@@ -80,7 +83,7 @@ export default function CampaignDetailPage() {
       if (prev && isOlderTimestamp(patch.updatedAt, prev.updatedAt)) return prev
       if (!prev) return { ...patch }
       const next = { ...prev }
-      const keys = ['total', 'pending', 'processing', 'sent', 'failed', 'cancelled', 'processed', 'percentage', 'updatedAt', 'startedAt', 'completedAt']
+      const keys = ['total', 'pending', 'processing', 'sent', 'failed', 'cancelled', 'processed', 'percentage', 'updatedAt', 'startedAt', 'completedAt', 'accountStats']
       for (const k of keys) {
         if (patch[k] !== undefined) next[k] = patch[k]
       }
@@ -120,6 +123,8 @@ export default function CampaignDetailPage() {
     if (event.status) patch.status = event.status
     if (event.error !== undefined) patch.error = event.error
     if (event.providerMessageId !== undefined) patch.providerMessageId = event.providerMessageId
+    if (event.emailAccountId !== undefined) patch.emailAccountId = event.emailAccountId
+    if (event.senderEmail !== undefined) patch.senderEmail = event.senderEmail
     if (event.sentAt) patch.sentAt = event.sentAt
     if (event.failedAt) patch.failedAt = event.failedAt
     if (event.processingAt) patch.processingAt = event.processingAt
@@ -291,6 +296,7 @@ export default function CampaignDetailPage() {
               processed: payload.processed,
               percentage: payload.percentage,
               updatedAt: payload.updatedAt,
+              accountStats: payload.accountStats,
             })
           } catch (err) {
             console.error('[SSE] Error parsing campaign-progress:', err)
@@ -328,6 +334,8 @@ export default function CampaignDetailPage() {
                     sentAt: r.sentAt,
                     failedAt: r.failedAt,
                     providerMessageId: r.providerMessageId,
+                    emailAccountId: r.emailAccountId,
+                    senderEmail: r.senderEmail,
                     processingAt: r.processingAt,
                     updatedAt: r.updatedAt,
                   }
@@ -347,6 +355,8 @@ export default function CampaignDetailPage() {
                   sentAt: r.sentAt,
                   failedAt: r.failedAt,
                   providerMessageId: r.providerMessageId,
+                  emailAccountId: r.emailAccountId,
+                  senderEmail: r.senderEmail,
                   processingAt: r.processingAt,
                   updatedAt: r.updatedAt,
                 })
@@ -444,11 +454,25 @@ export default function CampaignDetailPage() {
     }
   }
 
-  async function handleUpload(file, allowInvalid = false) {
+  async function handleUpload(file, allowInvalid = false, selectedDepartments) {
+    if (selectedDepartments === undefined) {
+      uploadDepartmentRequestRef.current += 1
+      setUploadDepartmentValidationLoading(false)
+      setUploadSelectedDepartments([])
+    }
     setUploading(true)
     setUploadProgress(0)
     try {
-      const result = await uploadRecipients(id, file, setUploadProgress, allowInvalid)
+      if (selectedDepartments === undefined) {
+        const preview = await validateRecipients(file)
+        if (preview.hasDepartments) {
+          setUploadValidationResult(preview)
+          setPendingUploadFile(file)
+          setUploadSelectedDepartments(preview.departments.map((department) => department.name))
+          return
+        }
+      }
+      const result = await uploadRecipients(id, file, setUploadProgress, allowInvalid, selectedDepartments)
       setUploadValidationResult(result.errors?.length ? result : null)
       setPendingUploadFile(null)
       notify(`${result.valid} recipients added; ${result.duplicates} duplicates, ${result.invalid} invalid, ${result.suppressed} suppressed`)
@@ -458,10 +482,41 @@ export default function CampaignDetailPage() {
       if (requestError.code === 'CSV_VALIDATION_FAILED') {
         setUploadValidationResult(requestError.data)
         setPendingUploadFile(file)
+      } else if (['DEPARTMENTS_REQUIRED', 'INVALID_DEPARTMENT_SELECTION'].includes(requestError.code)) {
+        setUploadValidationResult(requestError.data || null)
+        setPendingUploadFile(file)
       }
       notify(requestError.message, 'error')
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function updateUploadDepartmentSelection(nextSelection) {
+    setUploadSelectedDepartments(nextSelection)
+    if (!pendingUploadFile) return
+    if (!nextSelection.length) {
+      const requestId = ++uploadDepartmentRequestRef.current
+      setUploadDepartmentValidationLoading(true)
+      try {
+        const result = await validateRecipients(pendingUploadFile)
+        if (requestId === uploadDepartmentRequestRef.current) setUploadValidationResult(result)
+      } catch (requestError) {
+        if (requestId === uploadDepartmentRequestRef.current) notify(requestError.message, 'error')
+      } finally {
+        if (requestId === uploadDepartmentRequestRef.current) setUploadDepartmentValidationLoading(false)
+      }
+      return
+    }
+    const requestId = ++uploadDepartmentRequestRef.current
+    setUploadDepartmentValidationLoading(true)
+    try {
+      const result = await validateRecipients(pendingUploadFile, nextSelection)
+      if (requestId === uploadDepartmentRequestRef.current) setUploadValidationResult(result)
+    } catch (requestError) {
+      if (requestId === uploadDepartmentRequestRef.current) notify(requestError.message, 'error')
+    } finally {
+      if (requestId === uploadDepartmentRequestRef.current) setUploadDepartmentValidationLoading(false)
     }
   }
 
@@ -472,6 +527,19 @@ export default function CampaignDetailPage() {
   const status = campaign.status
   const processed = current.sent + current.failed + current.cancelled
   const percentage = current.total > 0 ? Math.min(100, Math.round((processed / current.total) * 100)) : 0
+  const uploadDepartmentOptions = uploadValidationResult?.departments || []
+  const selectedUploadDepartmentCount = uploadDepartmentOptions
+    .filter((department) => uploadSelectedDepartments.length === 0 || uploadSelectedDepartments.includes(department.name))
+    .reduce((total, department) => total + department.count, 0)
+  const excludedUploadDepartmentCount = Math.max(0, (uploadValidationResult?.totalRows || 0) - selectedUploadDepartmentCount)
+  const uploadDepartmentSamples = (isSelected) => uploadDepartmentOptions
+    .filter((department) => uploadSelectedDepartments.length === 0 ? isSelected : uploadSelectedDepartments.includes(department.name) === isSelected)
+    .flatMap((department) => department.samples || [])
+    .slice(0, 5)
+  const hasCsvDepartmentSummary = Number(campaign.csvRecipientCount || 0) > 0
+  const csvRecipientCount = hasCsvDepartmentSummary ? campaign.csvRecipientCount : current.total
+  const selectedRecipientCount = hasCsvDepartmentSummary ? campaign.selectedRecipientCount : current.total
+  const excludedRecipientCount = hasCsvDepartmentSummary ? campaign.excludedRecipientCount : 0
 
   return (
     <div className="page-stack detail-page">
@@ -521,7 +589,10 @@ export default function CampaignDetailPage() {
       </section>
 
       <section className="stats-grid detail-stats">
-        <StatCard label="Total" value={current.total} icon={Users} tone="green" />
+        <StatCard label="Total CSV rows" value={csvRecipientCount} icon={FileSpreadsheet} tone="slate" />
+        <StatCard label="Selected" value={selectedRecipientCount} icon={Users} tone="green" />
+        <StatCard label="Excluded" value={excludedRecipientCount} icon={Ban} tone="slate" />
+        <StatCard label="Eligible" value={current.total} icon={Users} tone="green" />
         <StatCard label="Sent" value={current.sent} icon={Check} tone="green" />
         <StatCard label="Processing" value={current.processing} icon={Play} tone="blue" />
         <StatCard label="Pending" value={current.pending} icon={Clock3} tone="amber" />
@@ -536,7 +607,7 @@ export default function CampaignDetailPage() {
             <h2>{terminalStates.includes(status) ? 'Delivery results' : 'Live delivery'}</h2>
             <div className="progress-summary-line">
               <strong>{processed.toLocaleString()}</strong>
-              <span className="muted-cell"> of {current.total.toLocaleString()} processed</span>
+              <span className="muted-cell"> of {current.total.toLocaleString()} eligible recipients processed</span>
               <span className="progress-percent">{percentage}%</span>
             </div>
           </div>
@@ -552,6 +623,7 @@ export default function CampaignDetailPage() {
           <span><i className="legend-dot legend-pending" /> Pending</span>
           <span><i className="legend-dot legend-failed" /> Failed or cancelled</span>
         </div>
+        <p className="muted-cell">Sent means accepted by the sending provider; mailbox delivery is not confirmed.</p>
         {current.processing > 0 && (
           <div className="processing-note" aria-live="polite">
             <span className="live-dot live-dot-pulse" /> Sending email… Next email is processed according to your configured sending rate.
@@ -559,6 +631,10 @@ export default function CampaignDetailPage() {
         )}
         <span className="sr-only">Last updated {lastUpdated.toLocaleTimeString()}</span>
       </section>
+
+      {campaign.selectedDepartments?.length > 0 && (
+        <p className="muted-cell">Selected departments: {campaign.selectedDepartments.map((department) => department || 'No department').join(', ')}</p>
+      )}
 
       {status === 'draft' && (
         <section className="panel upload-panel">
@@ -570,6 +646,43 @@ export default function CampaignDetailPage() {
             </div>
           </div>
           <CsvUploader onUpload={handleUpload} uploading={uploading} progress={uploadProgress} disabled={uploading} />
+          {uploadDepartmentValidationLoading && <p className="muted-cell">Checking selected departments…</p>}
+          {uploadValidationResult?.hasDepartments && (
+            <div className="department-selector">
+              <div className="panel-heading panel-heading-inline">
+                <div>
+                  <h3>Select recipients</h3>
+                  <p>Choose departments to include. Clearing the selection includes all valid recipients.</p>
+                </div>
+                <div className="button-group">
+                  <button className="button button-secondary button-small" type="button" onClick={() => void updateUploadDepartmentSelection(uploadDepartmentOptions.map((department) => department.name))} disabled={uploadDepartmentValidationLoading || uploading}>Select All</button>
+                  <button className="button button-secondary button-small" type="button" onClick={() => void updateUploadDepartmentSelection([])} disabled={uploadDepartmentValidationLoading || uploading}>Clear Selection</button>
+                </div>
+              </div>
+              <div className="department-options">
+                {uploadDepartmentOptions.map((department) => (
+                  <label className="department-option" key={department.key || '__no_department__'}>
+                    <input
+                      type="checkbox"
+                      checked={uploadSelectedDepartments.includes(department.name)}
+                      disabled={uploadDepartmentValidationLoading || uploading}
+                      onChange={(event) => {
+                        const next = event.target.checked
+                          ? [...uploadSelectedDepartments, department.name]
+                          : uploadSelectedDepartments.filter((name) => name !== department.name)
+                        void updateUploadDepartmentSelection(next)
+                      }}
+                    />
+                    <span>{department.label || department.name}</span>
+                    <strong>{department.count}</strong>
+                  </label>
+                ))}
+              </div>
+              <p><strong>Selected recipients:</strong> {selectedUploadDepartmentCount} <span className="muted-cell">·</span> <strong>Excluded recipients:</strong> {excludedUploadDepartmentCount}</p>
+              {uploadDepartmentSamples(true).length > 0 && <p className="muted-cell">Selected preview: {uploadDepartmentSamples(true).map((item) => item.email).join(', ')}</p>}
+              {uploadDepartmentSamples(false).length > 0 && <p className="muted-cell">Excluded preview: {uploadDepartmentSamples(false).map((item) => item.email).join(', ')}</p>}
+            </div>
+          )}
           {uploadValidationResult && (
             <div className="validation-errors">
               <p>Total rows: {uploadValidationResult.totalRows} · Valid recipients: {uploadValidationResult.valid} · Invalid: {uploadValidationResult.invalid}</p>
@@ -586,10 +699,42 @@ export default function CampaignDetailPage() {
             </div>
           )}
           {pendingUploadFile && uploadValidationResult?.valid > 0 && (
-            <button className="button button-secondary" type="button" disabled={uploading} onClick={() => handleUpload(pendingUploadFile, true)}>
+            <button className="button button-secondary" type="button" disabled={uploading || uploadDepartmentValidationLoading} onClick={() => handleUpload(pendingUploadFile, true, uploadValidationResult.hasDepartments ? uploadSelectedDepartments : undefined)}>
               Continue with {uploadValidationResult.valid} valid recipients
             </button>
           )}
+        </section>
+      )}
+
+      {campaign.selectedEmailAccounts?.length > 0 && (
+        <section className="panel table-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="section-kicker">SENDING ACCOUNTS</span>
+              <h2>{campaign.emailAccountMode === 'round_robin' ? 'Round-robin assignment' : 'Campaign sender'}</h2>
+            </div>
+          </div>
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>Account</th><th>Assigned</th><th>Sent</th><th>Failed</th><th>Pending</th><th>Processing</th></tr></thead>
+              <tbody>
+                {campaign.selectedEmailAccounts.map((account) => {
+                  const accountId = String(account.emailAccountId?._id || account.emailAccountId)
+                  const counts = stats?.accountStats?.find((item) => item.emailAccountId === accountId) || {}
+                  return (
+                    <tr key={accountId}>
+                      <td>{account.email}</td>
+                      <td>{counts.assigned || 0}</td>
+                      <td>{counts.sent || 0}</td>
+                      <td>{counts.failed || 0}</td>
+                      <td>{counts.pending || 0}</td>
+                      <td>{counts.processing || 0}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 
@@ -619,6 +764,7 @@ export default function CampaignDetailPage() {
                   <tr>
                     <th>Name</th>
                     <th>Email</th>
+                    <th>Sending account</th>
                     <th>Status</th>
                     <th>Error</th>
                     <th>Sent at</th>
@@ -629,6 +775,7 @@ export default function CampaignDetailPage() {
                     <tr key={recipient._id}>
                       <td>{recipient.name || '—'}</td>
                       <td>{recipient.email}</td>
+                      <td>{recipient.senderEmail || '—'}</td>
                       <td>
                         <StatusBadge
                           status={recipient.status}

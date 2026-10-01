@@ -13,6 +13,24 @@ const RecipientSchema = new mongoose.Schema(
       index: true,
       default: null,
     },
+    sequence: {
+      type: Number,
+      default: null,
+    },
+    emailAccountId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EmailAccount',
+      default: null,
+    },
+    senderEmail: {
+      type: String,
+      default: '',
+    },
+    department: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     email: {
       type: String,
       required: true,
@@ -64,5 +82,6 @@ const RecipientSchema = new mongoose.Schema(
 );
 
 RecipientSchema.index({ campaignId: 1, email: 1 }, { unique: true });
+RecipientSchema.index({ campaignId: 1, sequence: 1 });
 
 module.exports = mongoose.model('Recipient', RecipientSchema);

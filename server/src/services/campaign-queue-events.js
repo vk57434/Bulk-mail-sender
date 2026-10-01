@@ -8,7 +8,7 @@ const {
   publishCampaignProgress,
   publishCampaignCompleted,
 } = require('./campaign-events.bus');
-const { recalculateCampaignCounters } = require('./campaign.service');
+const { recalculateCampaignCounters, getCampaignAccountStats } = require('./campaign.service');
 
 const QUEUE_NAME = 'emailQueue';
 let queueEventsInstance = null;
@@ -42,6 +42,7 @@ async function buildCampaignProgressPayload(campaignId) {
       cancelled,
       processed,
       percentage: total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
+      accountStats: await getCampaignAccountStats(campaignId),
       updatedAt: counters.updatedAt,
     };
   } catch (error) {
@@ -76,7 +77,7 @@ async function emitCampaignProgressAndComplete(campaignId) {
 
 async function publishRecipientFromMongo(campaignId, recipientId) {
   const recipient = await Recipient.findOne({ _id: recipientId, campaignId })
-    .select('_id name email status error processingAt sentAt failedAt providerMessageId updatedAt')
+    .select('_id name email status error processingAt sentAt failedAt providerMessageId emailAccountId senderEmail updatedAt')
     .lean();
   if (!recipient) return;
 
@@ -84,6 +85,8 @@ async function publishRecipientFromMongo(campaignId, recipientId) {
     type: 'recipient.status',
     campaignId: String(campaignId),
     recipientId: String(recipient._id),
+    emailAccountId: recipient.emailAccountId ? String(recipient.emailAccountId) : null,
+    senderEmail: recipient.senderEmail || '',
     name: recipient.name || '',
     email: recipient.email,
     status: String(recipient.status).toUpperCase(),

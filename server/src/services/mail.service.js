@@ -51,6 +51,7 @@ async function sendMail({ to, subject, html, text, from = config.smtpFrom }) {
     return response;
   } catch (error) {
     logger.error({ err: error, to }, 'Email send failed');
+    if (!error.deliveryOutcome) error.deliveryOutcome = 'unknown';
     throw error;
   }
 }

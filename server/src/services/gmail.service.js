@@ -58,6 +58,7 @@ async function fetchUserProfile(tokens) {
   return {
     email: String(data.email).toLowerCase().trim(),
     displayName: String(data.name || data.email || '').trim(),
+    verifiedEmail: data.verified_email === true,
   };
 }
 
@@ -163,6 +164,7 @@ async function sendGmailMessage({ credentials, from, to, cc = [], bcc = [], subj
       code: 'GMAIL_API_ERROR',
       statusCode: Number(statusCode) || 500,
       reconnectRequired,
+      deliveryOutcome: error.response && Number(statusCode) < 500 ? 'not_sent' : 'unknown',
     });
   }
   const messageId = String(response?.data?.id || crypto.randomBytes(12).toString('hex'));

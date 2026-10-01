@@ -186,7 +186,7 @@ async function streamCampaignEvents(req, res, next) {
   setImmediate(async () => {
     try {
       const recipients = await Recipient.find({ campaignId })
-        .select('_id name email status error sentAt processingAt failedAt providerMessageId updatedAt')
+        .select('_id name email status error sentAt processingAt failedAt providerMessageId emailAccountId senderEmail updatedAt')
         .sort({ createdAt: 1 })
         .limit(500)
         .lean();
@@ -202,6 +202,8 @@ async function streamCampaignEvents(req, res, next) {
           sentAt: r.sentAt || null,
           failedAt: r.failedAt || null,
           providerMessageId: r.providerMessageId || null,
+          emailAccountId: r.emailAccountId ? String(r.emailAccountId) : null,
+          senderEmail: r.senderEmail || '',
           processingAt: r.processingAt || null,
           updatedAt: r.updatedAt,
         })),
