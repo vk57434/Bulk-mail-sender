@@ -148,6 +148,11 @@ tbody tr:hover { background: var(--surface-alt); }
 .search-field input::placeholder { color: var(--subtle); }
 .toolbar-select { min-height: 35px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--surface); }
 .toolbar-select select { max-width: 160px; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 10px; cursor: pointer; }
+.toolbar-select:focus-within { border-color: var(--accent); box-shadow: var(--focus); }
+.campaign-status-filter { color-scheme: light; }
+:root[data-theme='dark'] .campaign-status-filter { color-scheme: dark; }
+.campaign-status-filter option { color: var(--ink); background: var(--surface); }
+.campaign-status-filter option:checked, .campaign-status-filter option:hover, .campaign-status-filter option:focus { color: var(--accent-ink); background: var(--accent-soft); }
 .result-count { margin-left: auto; color: var(--muted); font-size: 10px; }
 .campaign-table-desktop td:last-child { min-width: 220px; }
 .campaign-card { display: grid; gap: 10px; padding: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
