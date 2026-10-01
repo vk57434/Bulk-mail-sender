@@ -1,0 +1,78 @@
+:root {
+  font-family: 'IBM Plex Sans', 'Aptos', 'Segoe UI', sans-serif;
+  color: #273632;
+  background: #f3f6f4;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-weight: 400;
+
+  --page: #f3f6f4;
+  --surface: #ffffff;
+  --surface-alt: #f8faf8;
+  --surface-raised: #ffffff;
+  --ink: #20332e;
+  --muted: #76857f;
+  --subtle: #9aa6a1;
+  --line: #e4eae6;
+  --line-strong: #d5dfd9;
+  --accent: #28745e;
+  --accent-hover: #1c624e;
+  --accent-soft: #e8f3ed;
+  --accent-ink: #205b49;
+  --blue: #557e8d;
+  --blue-soft: #eaf2f5;
+  --amber: #aa7836;
+  --amber-soft: #fbf1df;
+  --rose: #b65c55;
+  --rose-soft: #f8e9e7;
+  --slate-soft: #edf0ef;
+  --shadow-sm: 0 1px 2px rgba(28, 48, 40, 0.04), 0 5px 16px rgba(28, 48, 40, 0.025);
+  --shadow-md: 0 16px 42px rgba(17, 35, 27, 0.14);
+  --radius: 9px;
+  --radius-sm: 6px;
+  --sidebar: #19332d;
+  --sidebar-muted: #a9bbb3;
+  --focus: 0 0 0 3px rgba(40, 116, 94, 0.18);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  color: #e4ede8;
+  background: #111a17;
+  --page: #111a17;
+  --surface: #19231f;
+  --surface-alt: #1d2924;
+  --surface-raised: #202d28;
+  --ink: #e4ede8;
+  --muted: #a2b0a9;
+  --subtle: #788981;
+  --line: #2c3a34;
+  --line-strong: #3b4b43;
+  --accent: #72b99a;
+  --accent-hover: #8ac8aa;
+  --accent-soft: #263d33;
+  --accent-ink: #b8dec8;
+  --blue: #8ab2c2;
+  --blue-soft: #263b42;
+  --amber: #d4aa67;
+  --amber-soft: #403622;
+  --rose: #df8a80;
+  --rose-soft: #432b2a;
+  --slate-soft: #2a3631;
+  --shadow-sm: 0 2px 12px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 18px 46px rgba(0, 0, 0, 0.36);
+  --sidebar: #101b17;
+  --sidebar-muted: #9aaca3;
+  --focus: 0 0 0 3px rgba(114, 185, 154, 0.2);
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; min-height: 100%; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--page); color: var(--ink); font-size: 14px; line-height: 1.5; }
+button, input, textarea, select { font: inherit; }
+button { color: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; box-shadow: var(--focus); }
+a { color: inherit; }
+::selection { background: rgba(67, 139, 111, 0.2); }

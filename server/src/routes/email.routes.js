@@ -1,0 +1,1 @@
+const r=require('express').Router();const c=require('../controllers/email.controller');const {requireAuth}=require('../middleware/auth.middleware');r.use(requireAuth);r.post('/send',c.send);r.get('/history',c.history);r.get('/:id',c.get);module.exports=r;
