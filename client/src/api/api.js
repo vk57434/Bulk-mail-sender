@@ -1,7 +1,19 @@
 import axios from 'axios'
 
+const configuredApiOrigin = import.meta.env.VITE_API_URL?.trim()
+
+if (!configuredApiOrigin) {
+  throw new Error('VITE_API_URL must be configured for this frontend build')
+}
+
+const normalizedApiOrigin = configuredApiOrigin
+  .replace(/\/+$/, '')
+  .replace(/\/api$/i, '')
+
+export const API_BASE_URL = `${normalizedApiOrigin}/api`
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  baseURL: API_BASE_URL,
   timeout: 20000,
 })
 

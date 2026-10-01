@@ -1,6 +1,7 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Ban, Check, Clock3, Edit3, FileSpreadsheet, Mail, Pause, Play, Trash2, Users, XCircle, Wifi, WifiOff } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { API_BASE_URL } from '../api/api'
 import { getCampaign, getCampaignEventsToken, getCampaignRecipients, getCampaignStats, removeCampaign, runCampaignAction, uploadRecipients } from '../services/campaign.service'
 import useToast from '../hooks/useToast'
 import CampaignProgress from '../components/CampaignProgress'
@@ -240,8 +241,7 @@ export default function CampaignDetailPage() {
         }
         if (cancelled || !eventTokenRef.current) return
 
-        const base = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/$/, '')
-        const url = `${base}/campaigns/${encodeURIComponent(id)}/events?token=${encodeURIComponent(eventTokenRef.current)}`
+        const url = `${API_BASE_URL}/campaigns/${encodeURIComponent(id)}/events?token=${encodeURIComponent(eventTokenRef.current)}`
         const es = new EventSource(url, { withCredentials: false })
         eventSourceRef.current = es
 
