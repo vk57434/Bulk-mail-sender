@@ -1,28 +1,32 @@
-const IORedis = require("ioredis");
+const IORedis = require('ioredis');
+const config = require('./env');
 
-const redisConnection = new IORedis({
-  host: process.env.REDIS_HOST || "127.0.0.1",
-  port: Number(process.env.REDIS_PORT || 6379),
-  password: process.env.REDIS_PASSWORD || undefined,
+const redisOptions = { maxRetriesPerRequest: null };
+const redisConnection = config.redisUrl
+  ? new IORedis(config.redisUrl, redisOptions)
+  : new IORedis({
+      host: config.redisHost,
+      port: config.redisPort,
+      password: config.redisPassword || undefined,
+      ...redisOptions,
+    });
 
-  // Required/recommended for BullMQ
-  maxRetriesPerRequest: null,
-});
+console.info(config.redisUrl ? '[Redis] Using REDIS_URL' : '[Redis] Using REDIS_HOST/REDIS_PORT configuration');
 
 redisConnection.on("connect", () => {
-  console.log("Redis connected");
+  console.log('[Redis] Connected');
 });
 
 redisConnection.on("ready", () => {
-  console.log("Redis ready");
+  console.log('[Redis] Ready');
 });
 
 redisConnection.on("error", (error) => {
-  console.error("Redis error:", error.message);
+  console.error('[Redis] Connection error:', error.message);
 });
 
 redisConnection.on("close", () => {
-  console.log("Redis connection closed");
+  console.log('[Redis] Connection closed');
 });
 
 module.exports = redisConnection;

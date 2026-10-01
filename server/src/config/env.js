@@ -15,6 +15,7 @@ const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 5000),
   mongoUri: process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/bulk_mail',
+  redisUrl: process.env.REDIS_URL || '',
   redisHost: process.env.REDIS_HOST || '127.0.0.1',
   redisPort: Number(process.env.REDIS_PORT || 6379),
   redisPassword: process.env.REDIS_PASSWORD || '',
