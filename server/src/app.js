@@ -56,8 +56,8 @@ app.use('/api/email-accounts', emailAccountRoutes);
 app.use('/api/emails', emailRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/campaigns', campaignRoutes);
 app.use('/api/campaigns', campaignEventRoutes);
+app.use('/api/campaigns', campaignRoutes);
 app.use('/api/campaigns', recipientRoutes);
 app.use('/api', unsubscribeRoutes);
 

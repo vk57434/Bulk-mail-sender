@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "worker": "node src/workers/email.worker.js",
     "queue:diagnostics": "node src/scripts/queue.diagnostics.js",
-    "test": "node --check src/server.js && node --check src/workers/email.worker.js && node --check src/scripts/queue.diagnostics.js"
+    "test": "node --check src/server.js && node --check src/workers/email.worker.js && node --check src/scripts/queue.diagnostics.js",
+    "start:all": "concurrently --kill-others --names API,WORKER \"npm start\" \"npm run worker\""
   },
   "keywords": [
     "bulk-mail",
@@ -24,6 +25,7 @@
   "dependencies": {
     "bcrypt": "^5.1.1",
     "bullmq": "^6.3.10",
+    "concurrently": "^10.0.5",
     "cors": "^2.8.6",
     "csv-parser": "^3.2.1",
     "dotenv": "^16.6.1",

@@ -125,14 +125,14 @@ function startCampaignQueueEvents() {
   queueEvents.on('active', async ({ jobId }) => {
     const parsed = parseJobId(jobId);
     if (!parsed) return;
-    logger.info({ jobId, ...parsed }, '[QUEUE] active event received');
+    logger.info(`[QueueEvents] active job=${jobId}`);
     await emitCampaignProgressAndComplete(parsed.campaignId);
   });
 
   queueEvents.on('progress', async ({ jobId, data }) => {
     try {
+      logger.info(`[QueueEvents] progress job=${jobId} status=${data?.status || 'updated'}`);
       await handleRecipientEvent(jobId, '[QUEUE] Recipient status changed');
-      logger.debug({ jobId, status: data?.status }, '[QueueEvents] progress event received');
     } catch (error) {
       logger.warn({ err: error, jobId }, '[QueueEvents] progress handler error');
     }
@@ -148,7 +148,7 @@ function startCampaignQueueEvents() {
 
   queueEvents.on('completed', async ({ jobId }) => {
     try {
-      logger.info({ jobId, ...parseJobId(jobId) }, '[QueueEvents] completed event received');
+      logger.info(`[QueueEvents] completed job=${jobId}`);
       await handleRecipientEvent(jobId, '[QUEUE] Recipient job completed');
     } catch (error) {
       logger.warn({ err: error, jobId }, '[QueueEvents] completed handler error');
@@ -157,6 +157,7 @@ function startCampaignQueueEvents() {
 
   queueEvents.on('failed', async ({ jobId, failedReason }) => {
     try {
+      logger.warn(`[QueueEvents] failed job=${jobId}`);
       logger.warn({ jobId, failedReason }, '[QueueEvents] failed event received');
       await handleRecipientEvent(jobId, '[QUEUE] Publishing persisted recipient failure/retry state');
     } catch (error) {

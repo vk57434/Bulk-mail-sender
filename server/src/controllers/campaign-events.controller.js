@@ -168,9 +168,9 @@ async function streamCampaignEvents(req, res, next) {
   const unsubscribe = subscribe(campaignId, (event) => {
     if (!event) return;
     if (event.type === 'recipient.status') {
-      const status = String(event.status || '').toUpperCase();
+      const status = String(event.status || '').toLowerCase();
       logger.info(`[SSE] Broadcasting recipient_status campaign=${campaignId} recipient=${event.recipientId} status=${status}`);
-      writeSse(res, 'recipient_status', { ...event, status });
+      writeSse(res, 'recipient_status', { ...event, type: 'recipient_status', status });
     } else if (event.type === 'campaign.progress') {
       logger.info({ campaignId, percentage: event.percentage }, '[SSE] Sending campaign progress');
       writeSse(res, 'campaign-progress', event);
@@ -186,7 +186,7 @@ async function streamCampaignEvents(req, res, next) {
   setImmediate(async () => {
     try {
       const recipients = await Recipient.find({ campaignId })
-        .select('_id name email status error sentAt processingAt failedAt updatedAt')
+        .select('_id name email status error sentAt processingAt failedAt providerMessageId updatedAt')
         .sort({ createdAt: 1 })
         .limit(500)
         .lean();
@@ -201,6 +201,7 @@ async function streamCampaignEvents(req, res, next) {
           error: r.error || '',
           sentAt: r.sentAt || null,
           failedAt: r.failedAt || null,
+          providerMessageId: r.providerMessageId || null,
           processingAt: r.processingAt || null,
           updatedAt: r.updatedAt,
         })),
@@ -217,7 +218,10 @@ async function streamCampaignEvents(req, res, next) {
   });
 
   const heartbeatInterval = setInterval(() => {
-    writeSse(res, 'ping', { type: 'ping', timestamp: new Date().toISOString() });
+    if (!res.writableEnded && !res.destroyed) {
+      res.write(`: heartbeat ${new Date().toISOString()}\n\n`);
+      if (typeof res.flush === 'function') res.flush();
+    }
   }, 15000);
 
   let connectionClosed = false;
@@ -227,9 +231,6 @@ async function streamCampaignEvents(req, res, next) {
     clearInterval(heartbeatInterval);
     try { unsubscribe(); } catch { /* ignore */ }
     logger.info(`[SSE] Client disconnected campaign=${campaignId}`);
-    if (!res.writableEnded) {
-      try { res.end(); } catch { /* ignore */ }
-    }
   };
 
   req.on('aborted', onClose);

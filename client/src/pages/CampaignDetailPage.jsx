@@ -249,7 +249,7 @@ export default function CampaignDetailPage() {
           if (cancelled) return
           setConnectionStatus('connected')
           errorCount = 0
-          console.info(`[SSE] Connected campaign=${id}`)
+          console.info(`[SSE] connected campaign=${id}`)
           reconcileRef.current?.()
         })
 
@@ -274,11 +274,6 @@ export default function CampaignDetailPage() {
             const data = JSON.parse(evt.data)
             console.info(`[SSE] Connected campaign=${data.campaignId || id}`)
           } catch { /* ignore */ }
-        })
-
-        listen(es, 'ping', () => {
-          if (cancelled) return
-          setConnectionStatus('connected')
         })
 
         listen(es, 'campaign-progress', (evt) => {
@@ -307,9 +302,9 @@ export default function CampaignDetailPage() {
           try {
             const payload = JSON.parse(evt.data)
             const normalized = { ...payload, status: String(payload.status || '').toLowerCase() }
-            console.info(`[React] recipient_status received campaign=${payload.campaignId} recipient=${payload.recipientId} status=${normalized.status}`)
+            console.info('[SSE] event received', payload)
             applyRecipientStatus(normalized)
-            console.info(`[SSE] Recipient updated: ${payload.recipientId} -> ${String(payload.status || '').toUpperCase()}`)
+            console.info(`[SSE] recipient updated ${payload.recipientId} -> ${normalized.status}`)
           } catch (err) {
             console.error('[SSE] Error parsing recipient_status:', err)
           }
@@ -332,6 +327,7 @@ export default function CampaignDetailPage() {
                     error: r.error || '',
                     sentAt: r.sentAt,
                     failedAt: r.failedAt,
+                    providerMessageId: r.providerMessageId,
                     processingAt: r.processingAt,
                     updatedAt: r.updatedAt,
                   }
@@ -350,6 +346,7 @@ export default function CampaignDetailPage() {
                   error: r.error || '',
                   sentAt: r.sentAt,
                   failedAt: r.failedAt,
+                  providerMessageId: r.providerMessageId,
                   processingAt: r.processingAt,
                   updatedAt: r.updatedAt,
                 })
